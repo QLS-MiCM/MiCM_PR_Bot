@@ -102,7 +102,7 @@ jobs:
               });
 
               stats.reposUpdated++;
-              core.info(`Updated ${owner}/${repo} on ${defaultBranch}`);
+              core.info(`Pushed workflow to ${owner}/${repo} on ${defaultBranch}`);
             }
 
             const repos = await listOrgRepos();
@@ -150,7 +150,7 @@ jobs:
               '| Metric | Count |',
               '|--------|-------|',
               `| Repos scanned | ${stats.scanned} |`,
-              `| Repos updated | ${stats.reposUpdated} |`,
+              `| Workflow pushed to repos | ${stats.reposUpdated} |`,
               `| Skipped (up to date) | ${stats.skippedUpToDate} |`,
               `| Skipped (MiCM_PR_Bot) | ${stats.skippedHostRepo} |`,
               `| Skipped (archived) | ${stats.skippedArchived} |`,
