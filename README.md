@@ -10,12 +10,6 @@ Central GitHub Actions automation for the [QLS-MiCM](https://github.com/QLS-MiCM
 | `distribute_pr_check_workflow.yml` | Commits the thin caller workflow directly to each org repo's default branch when the canonical template changes |
 | `workflow-templates/pr_check_issue_deploy_caller.yml` | Canonical caller text (not executed; read by the distributor) |
 
-## Secrets
-
-| Secret | Scope | Purpose |
-|--------|-------|---------|
-| `GH_ORG_SYNC_TOKEN` | MiCM_PR_Bot repo | PAT or GitHub App token for org-wide caller distribution |
-| `WORKSHOP_TEMPLATE_TOKEN` | Org secret | Creates tracking issues in `Workshop_Template` |
 
 ## Updating workflows
 
