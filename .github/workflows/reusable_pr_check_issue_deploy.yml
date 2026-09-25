@@ -1,3 +1,6 @@
+# DO NOT INCLUDE ANY actions/checkout CODE IN THIS WORKFLOW.
+# Called via pull_request_target from org workshop repos. Must only use event payload metadata.
+# Checking out PR head ref or running PR-supplied code would expose secrets to untrusted contributors.
 name: PR Checklist & External Issue (Reusable)
 
 on:
