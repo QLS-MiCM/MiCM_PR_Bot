@@ -1,0 +1,65 @@
+# Lints the files a pull request changes in a workshop repo.
+# Called via pull_request (NOT pull_request_target): the token is read-only and there are
+# no secrets, so checking out the PR is safe here. Do not add secrets to this workflow.
+# The linter is taken from this repo, not from the PR, so a PR cannot change its own checks.
+name: Lint workshop material (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      linter_ref:
+        description: MiCM_PR_Bot branch, tag or commit to take the linter from
+        type: string
+        default: main
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout workshop repo
+        uses: actions/checkout@v5
+        with:
+          # The pull request merge commit and its first parent (the base branch)
+          fetch-depth: 2
+
+      - name: Checkout linter
+        uses: actions/checkout@v5
+        with:
+          repository: QLS-MiCM/MiCM_PR_Bot
+          ref: ${{ inputs.linter_ref }}
+          path: .micm_pr_bot
+          sparse-checkout: scripts
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install linter dependencies
+        run: pip install --quiet nbformat pyyaml
+
+      - name: Select files
+        id: select
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" = "pull_request" ]; then
+            scope="--changed-since HEAD^1"
+          else
+            scope="--all"
+          fi
+          echo "scope=$scope" >> "$GITHUB_OUTPUT"
+          python .micm_pr_bot/scripts/lint_workshop.py $scope --print-files | tee "$RUNNER_TEMP/files.txt"
+          if grep -qiE '\.(r|rmd|qmd)$' "$RUNNER_TEMP/files.txt"; then
+            echo "needs_r=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up R
+        if: steps.select.outputs.needs_r == 'true'
+        uses: r-lib/actions/setup-r@v2
+
+      - name: Lint
+        run: python .micm_pr_bot/scripts/lint_workshop.py ${{ steps.select.outputs.scope }} --github
