@@ -1,0 +1,14 @@
+# Checks that workshop material can be opened: notebooks are valid, scripts parse.
+# The checks live in QLS-MiCM/MiCM_PR_Bot. Change them there, not here.
+name: Lint workshop material
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    uses: QLS-MiCM/MiCM_PR_Bot/.github/workflows/reusable_lint_workshop.yml@main
