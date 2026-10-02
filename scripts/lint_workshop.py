@@ -36,11 +36,15 @@ except ImportError:
 RSCRIPT = shutil.which("Rscript")
 BASH = shutil.which("bash")
 SKIPPED = set()  # checks that could not run because a tool is missing
+BROKEN = set()  # checks that were attempted but did not complete; these fail the run
 
-# Parses every file given on the command line, prints "path<TAB>message" for failures.
+# Parses every file given on the command line, prints "path<TAB>message" for failures,
+# then a marker line so a parser that stopped early is not mistaken for clean files.
+R_DONE = "LINT_WORKSHOP_R_DONE"
 R_PARSE = (
     "for (f in commandArgs(TRUE)) tryCatch(invisible(parse(file = f, keep.source = FALSE)),"
-    " error = function(e) cat(f, '\\t', gsub('\\n', ' ', conditionMessage(e)), '\\n', sep = ''))"
+    " error = function(e) cat(f, '\\t', gsub('\\n', ' ', conditionMessage(e)), '\\n', sep = ''));"
+    f" cat('{R_DONE}\\n')"
 )
 
 
@@ -54,12 +58,21 @@ def r_parse_failures(paths):
     failures = {}
     for start in range(0, len(paths), 200):
         batch = [str(p) for p in paths[start:start + 200]]
-        out = subprocess.run([RSCRIPT, "-e", R_PARSE, *batch], capture_output=True, text=True)
+        # --vanilla: do not load .Rprofile or .Renviron from the repo being checked
+        out = subprocess.run([RSCRIPT, "--vanilla", "-e", R_PARSE, *batch], capture_output=True, text=True)
+        if out.returncode or R_DONE not in out.stdout:
+            reason = (out.stderr.strip().splitlines() or ["no output"])[-1][:160]
+            BROKEN.add(f"R code could not be checked: Rscript exited with status {out.returncode}: {reason}")
+            continue
         for line in out.stdout.splitlines():
             if "\t" in line:
                 path, msg = line.split("\t", 1)
                 failures[path] = re.sub(r"^.*?:(?=\d+:\d+:)", "", msg).strip()  # drop the file path R prepends
     return failures
+
+
+HELP = re.compile(r"[\w.\[\]]+\?{1,2}")  # `name?` and `name??`
+MAGIC_ASSIGNMENT = re.compile(r"^(\s*[A-Za-z_][\w.,\s\[\]]*?)=\s*[!%].*$")  # `x = !ls`, `x = %magic`
 
 
 def strip_ipython(source):
@@ -68,16 +81,15 @@ def strip_ipython(source):
         first = source.lstrip().split(None, 1)[0]
         if first not in ("%%time", "%%timeit", "%%capture"):
             return None  # the cell body is not Python
-        source = source.split("\n", 1)[1] if "\n" in source else ""
+        source = "\n" + (source.split("\n", 1)[1] if "\n" in source else "")  # keep line numbers
     lines = []
     for line in source.split("\n"):
         stripped = line.lstrip()
         indent = line[: len(line) - len(stripped)]
-        if stripped.startswith(("%", "!")) or stripped.startswith("?") or stripped.rstrip().endswith("?"):
+        if stripped.startswith(("%", "!", "?")) or HELP.fullmatch(stripped.strip()):
             line = indent + "pass"
         else:
-            # `x = !ls` and `x = %magic` assignments
-            line = re.sub(r"=\s*[!%].*$", "= None", line)
+            line = MAGIC_ASSIGNMENT.sub(r"\1= None", line)
         lines.append(line)
     return "\n".join(lines)
 
@@ -88,6 +100,15 @@ def python_syntax_error(source):
     except SyntaxError as e:
         return f"{type(e).__name__}: {e.msg} (line {e.lineno})"
     return None
+
+
+def python_cell_error(source):
+    """Syntax error in a notebook cell or chunk, or None. IPython syntax is allowed."""
+    err = python_syntax_error(source)
+    if err is None:
+        return None
+    cleaned = strip_ipython(source)
+    return python_syntax_error(cleaned) if cleaned is not None else None
 
 
 RELATIVE_IMG = re.compile(r'!\[[^\]]*\]\(([^)\s]+)|<img[^>]+src=["\']([^"\']+)')
@@ -137,8 +158,7 @@ def lint_ipynb(path, add):
             if not source.strip():
                 continue
             if language == "python":
-                cleaned = strip_ipython(source)
-                err = python_syntax_error(cleaned) if cleaned is not None else None
+                err = python_cell_error(source)
                 if err:
                     add("WARN", where, f"code cell does not parse: {err}")
             elif language == "r":
@@ -222,8 +242,7 @@ def lint_rmd(path, add):
             chunk.write_text(code)
             r_chunks[str(chunk)] = where
         elif language == "python":
-            cleaned = strip_ipython(code)
-            err = python_syntax_error(cleaned) if cleaned is not None else None
+            err = python_cell_error(code)
             if err:
                 add("WARN", where, f"python chunk does not parse: {err}")
         elif language in ("bash", "sh") and BASH:
@@ -310,8 +329,9 @@ def main():
         return
 
     findings = lint(files)
-    errors = sum(f["level"] == "ERROR" for f in findings)
-    total = f"{len(files)} file(s) checked, {errors} error(s), {len(findings) - errors} warning(s)"
+    errors = sum(f["level"] == "ERROR" for f in findings) + len(BROKEN)
+    warnings_count = sum(f["level"] == "WARN" for f in findings)
+    total = f"{len(files)} file(s) checked, {errors} error(s), {warnings_count} warning(s)"
     for f in findings:
         text = f"{f['where']}: {f['message']}" if f["where"] else f["message"]
         if args.github:
@@ -319,6 +339,8 @@ def main():
             print(f"::{kind} file={escape(f['file'], True)},title=Workshop lint::{escape(text)}")
         else:
             print(f"{f['level']:5} {f['file']}: {text}")
+    for problem in sorted(BROKEN):
+        print(f"::error title=Workshop lint::{escape(problem)}" if args.github else f"ERROR {problem}")
     for note in sorted(SKIPPED):
         print(f"::notice title=Workshop lint::{escape(note)}" if args.github else f"NOTE  {note}")
     print(total)
@@ -331,6 +353,7 @@ def main():
             for f in sorted(findings, key=lambda f: f["level"]):
                 problem = f["message"].replace("|", "\\|")
                 lines.append(f"| {'❌' if f['level'] == 'ERROR' else '⚠️'} | `{f['file']}` | {f['where']} | {problem} |")
+        lines += [f"- ❌ {problem}" for problem in sorted(BROKEN)]
         lines += [f"- {note}" for note in sorted(SKIPPED)]
         with open(summary, "a", encoding="utf-8") as out:
             out.write("\n".join(lines) + "\n")
